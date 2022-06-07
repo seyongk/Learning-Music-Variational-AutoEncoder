@@ -14,33 +14,32 @@ class MusicVAE(nn.Module):
 
         self.cache = None
         self._beta = nn.Parameter(torch.ones(size=(1,)), requires_grad=True)
-        # self.bce = nn.BCELoss(reduction="sum")  # with default option,
-        self.bce = nn.BCELoss()  # with default option,
+        self.bce = nn.BCELoss()
         self.sample_hidden_state = None
         self.eta = 10.0
 
-    def forward(self, x: torch.tensor, verbose: int=0):
+    def forward(self, x: torch.tensor, step_size: int, verbose: int=0):
         outputs = []
-        step_num = len(x) // 10
+        batch_size = x.shape[0] // step_size
         loss = 0
 
-        for n in range(step_num):
-            input_seq = x[n * step_num: (n + 1) * step_num]
-            if input_seq.shape[0] < step_num:
+        for n in range(step_size):
+            input_seq = x[n * batch_size: (n + 1) * batch_size]
+            if input_seq.shape[0] < batch_size:
                 break
             initial_state_of_conductor, mu, log_var = self.encoder.forward(input_seq)
         self.cache = mu, log_var
 
         context = None
-        for n in range(step_num):
-            input_seq = x[n * step_num: (n + 1) * step_num]
+        for n in range(step_size):
+            input_seq = x[n * batch_size: (n + 1) * batch_size]
 
             if context is None:
                 context, (hidden_state, _) = self.conductor(initial_state_of_conductor)
             else:
                 context, (hidden_state, _) = self.conductor(hidden_state)
 
-            if context.shape[0] < step_num:
+            if context.shape[0] < batch_size:
                 break
 
             probs = self.decoder(context)
