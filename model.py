@@ -12,31 +12,40 @@ class MusicVAE(nn.Module):
     def __init__(self):
         super(MusicVAE, self).__init__()
         self.encoder = Encoder()
+
         self.conductor = Conductor()
         self.decoder = Decoder()
 
         self.cache = None
+
         self._beta = nn.Parameter(torch.ones(size=(1,)), requires_grad=True)
         self.bce = nn.BCELoss()
+
         self.sample_hidden_state = None
+
         self.eta = 10.0
-        self.fc = nn.Sequential(
-            nn.Linear(512, 1024),
-            nn.Tanh()
-        )
+
+        # self.fc_conductor = nn.Sequential(
+        #             nn.Linear(512, 1024),
+        #             nn.Tanh()
+        # )
 
     def forward(
         self, x: torch.tensor, step_size: int, verbose: int = 0
     ) -> Tuple[List[torch.tensor], float]:
+
         outputs = []
         batch_size = x.shape[0] // step_size
         loss = 0
 
         for n in range(step_size):
             input_seq = x[n * batch_size : (n + 1) * batch_size]
+
             if input_seq.shape[0] < batch_size:
                 break
+
             initial_state_of_conductor, mu, log_var = self.encoder.forward(input_seq)
+
         self.cache = mu, log_var
 
         context = None
@@ -51,14 +60,15 @@ class MusicVAE(nn.Module):
             if context.shape[0] < batch_size:
                 break
 
-            initial_state_of_decoder = self.fc(context)
-            probs = self.decoder(initial_state_of_decoder)
+            # initial_state_of_decoder = self.fc_conductor(context)
+            probs = self.decoder(context)
             outputs.append(probs)
             recon_loss = self.bce(probs, input_seq)
             kl_loss = kl_divergence(mu, log_var)
 
             if verbose:
                 print(f"{recon_loss = }, {kl_loss = }")
+
             loss += self.eta * recon_loss + self._beta * kl_loss
 
         return outputs, loss
@@ -74,7 +84,7 @@ class MusicVAE(nn.Module):
             context, (self.sample_hidden_state, _) = self.conductor(
                 self.sample_hidden_state
             )
-        initial_state_of_decoder = self.fc(context)
+        initial_state_of_decoder = self.fc_conductor(context)
         decoded_probs = self.decoder(initial_state_of_decoder)
         return OneHotCategorical(decoded_probs)
 
@@ -112,6 +122,7 @@ class Encoder(nn.Module):
         log_var = self.fc_var(output)
 
         z_emb, _ = self.reparameterize(mu, log_var)
+
         initial_state_of_conductor = self.fc_z_emb(z_emb)
 
         return initial_state_of_conductor, mu, log_var
