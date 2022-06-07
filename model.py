@@ -1,8 +1,11 @@
+from typing import List, Tuple
+
+import torch
 import torch.cuda
 from torch import nn
 from torch.distributions import OneHotCategorical
+
 from loss import kl_divergence
-import torch
 
 
 class MusicVAE(nn.Module):
@@ -18,13 +21,15 @@ class MusicVAE(nn.Module):
         self.sample_hidden_state = None
         self.eta = 10.0
 
-    def forward(self, x: torch.tensor, step_size: int, verbose: int=0):
+    def forward(
+        self, x: torch.tensor, step_size: int, verbose: int = 0
+    ) -> Tuple[List[torch.tensor], float]:
         outputs = []
         batch_size = x.shape[0] // step_size
         loss = 0
 
         for n in range(step_size):
-            input_seq = x[n * batch_size: (n + 1) * batch_size]
+            input_seq = x[n * batch_size : (n + 1) * batch_size]
             if input_seq.shape[0] < batch_size:
                 break
             initial_state_of_conductor, mu, log_var = self.encoder.forward(input_seq)
@@ -32,7 +37,7 @@ class MusicVAE(nn.Module):
 
         context = None
         for n in range(step_size):
-            input_seq = x[n * batch_size: (n + 1) * batch_size]
+            input_seq = x[n * batch_size : (n + 1) * batch_size]
 
             if context is None:
                 context, (hidden_state, _) = self.conductor(initial_state_of_conductor)
@@ -48,30 +53,34 @@ class MusicVAE(nn.Module):
             kl_loss = kl_divergence(mu, log_var)
 
             if verbose:
-                print(f'{recon_loss = }, {kl_loss = }')
+                print(f"{recon_loss = }, {kl_loss = }")
             loss += self.eta * recon_loss + self._beta * kl_loss
 
         return outputs, loss
 
-    def sample(self):
+    def sample(self) -> torch.tensor:
         if self.sample_hidden_state is None:
             mu, log_var = self.cache
             initial_state_of_conductor = self.encoder.sample(mu, log_var)
-            context, (self.sample_hidden_state, _) = self.conductor(initial_state_of_conductor)
+            context, (self.sample_hidden_state, _) = self.conductor(
+                initial_state_of_conductor
+            )
         else:
-            context, (self.sample_hidden_state, _) = self.conductor(self.sample_hidden_state)
+            context, (self.sample_hidden_state, _) = self.conductor(
+                self.sample_hidden_state
+            )
         decoded_probs = self.decoder(context)
         return OneHotCategorical(decoded_probs)
 
-    def initialize_sampler(self):
+    def initialize_sampler(self) -> None:
         self.sample_hidden_state = None
 
     @property
-    def beta(self):
+    def beta(self) -> torch.tensor:
         return self._beta
-    
+
     @beta.setter
-    def beta(self, value):
+    def beta(self, value: torch.tensor) -> None:
         self._beta = value
 
 
@@ -84,13 +93,12 @@ class Encoder(nn.Module):
 
         self.fc_mu = nn.Linear(2048, 1024)
         self.fc_var = nn.Linear(2048, 1024)
-        self.fc_z_emb = nn.Sequential(
-            nn.Linear(1024, 512),
-            nn.Tanh()
-        )
+        self.fc_z_emb = nn.Sequential(nn.Linear(1024, 512), nn.Tanh())
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
-    def forward(self, x):
+    def forward(
+        self, x: torch.tensor
+    ) -> Tuple[torch.tensor, torch.tensor, torch.tensor]:
         output, _ = self.lstm_1(x)
         output, _ = self.lstm_2(output)
 
@@ -102,12 +110,14 @@ class Encoder(nn.Module):
 
         return initial_state_of_conductor, mu, log_var
 
-    def reparameterize(self, mu, log_var):
+    def reparameterize(
+        self, mu: torch.tensor, log_var: torch.tensor
+    ) -> Tuple[torch.tensor, torch.tensor]:
         std = torch.mul(log_var, 0.5).exp_()
         eps = torch.FloatTensor(std.size()).normal_().to(self.device)
         return mu + torch.mul(std, eps), std
 
-    def sample(self, mu, log_var):
+    def sample(self, mu: torch.tensor, log_var: torch.tennsor) -> torch.tensor:
         z_emb, _ = self.reparameterize(mu, log_var)
         return self.fc_z_emb(z_emb)
 
@@ -119,7 +129,7 @@ class Decoder(nn.Module):
         self.lstm_2 = nn.LSTM(input_size=1024, hidden_size=256)
         self.softmax = nn.Softmax()
 
-    def forward(self, x):
+    def forward(self, x: torch.tensor) -> torch.tensor:
         out, _ = self.lstm_1(x)
         out, _ = self.lstm_2(out)
         return self.softmax(out)
@@ -131,6 +141,6 @@ class Conductor(nn.Module):
         self.conductor_1 = nn.LSTM(input_size=512, hidden_size=1024)
         self.conductor_2 = nn.LSTM(input_size=1024, hidden_size=512)
 
-    def forward(self, x):
+    def forward(self, x: torch.tensor) -> torch.tensor:
         output, _ = self.conductor_1(x)
         return self.conductor_2(output)
