@@ -20,6 +20,10 @@ class MusicVAE(nn.Module):
         self.bce = nn.BCELoss()
         self.sample_hidden_state = None
         self.eta = 10.0
+        self.fc = nn.Sequential(
+            nn.Linear(512, 1024),
+            nn.Tanh()
+        )
 
     def forward(
         self, x: torch.tensor, step_size: int, verbose: int = 0
@@ -47,7 +51,8 @@ class MusicVAE(nn.Module):
             if context.shape[0] < batch_size:
                 break
 
-            probs = self.decoder(context)
+            initial_state_of_decoder = self.fc(context)
+            probs = self.decoder(initial_state_of_decoder)
             outputs.append(probs)
             recon_loss = self.bce(probs, input_seq)
             kl_loss = kl_divergence(mu, log_var)
@@ -69,7 +74,8 @@ class MusicVAE(nn.Module):
             context, (self.sample_hidden_state, _) = self.conductor(
                 self.sample_hidden_state
             )
-        decoded_probs = self.decoder(context)
+        initial_state_of_decoder = self.fc(context)
+        decoded_probs = self.decoder(initial_state_of_decoder)
         return OneHotCategorical(decoded_probs)
 
     def initialize_sampler(self) -> None:
@@ -117,7 +123,7 @@ class Encoder(nn.Module):
         eps = torch.FloatTensor(std.size()).normal_().to(self.device)
         return mu + torch.mul(std, eps), std
 
-    def sample(self, mu: torch.tensor, log_var: torch.tennsor) -> torch.tensor:
+    def sample(self, mu: torch.tensor, log_var: torch.tensor) -> torch.tensor:
         z_emb, _ = self.reparameterize(mu, log_var)
         return self.fc_z_emb(z_emb)
 
@@ -125,7 +131,7 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     def __init__(self):
         super(Decoder, self).__init__()
-        self.lstm_1 = nn.LSTM(input_size=512, hidden_size=1024)
+        self.lstm_1 = nn.LSTM(input_size=1024, hidden_size=1024)
         self.lstm_2 = nn.LSTM(input_size=1024, hidden_size=256)
         self.softmax = nn.Softmax()
 
