@@ -14,59 +14,60 @@ class MusicVAE(nn.Module):
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
         self.encoder = Encoder()
 
-        # Hierarchcial Decoder의 구성 요소인 conductor 클래스의 인스턴스를 생성
+        # Conductor class is a component of Hierarchical Decoder.
         self.conductor = Conductor()
         self.decoder = Decoder()
 
         self.fc_mu = nn.Linear(1024, 256)
         self.fc_var = nn.Linear(1024, 256)
         self.fc_z_emb = nn.Sequential(nn.Linear(256, 512), nn.Tanh())
-
         self.fc_conductor = nn.Sequential(nn.Linear(512, 1024), nn.Tanh())
 
-        self.bce = nn.BCELoss(reduction="sum")
+        self.recon_loss = nn.BCELoss(reduction="sum")
 
-        # Reparameterization에 사용되는 beta 파라미터
-        self.max_beta = torch.Tensor([0.2]).to(
-            self.device
-        )  # Maximum KL cost weight, or cost if not annealing. small data: 0.2, big data: 0.5
-        self.beta_rate = torch.Tensor([0.99999]).to(
-            self.device
-        )  # Exponential rate at which to anneal KL cost.
+        # Maximum KL cost weight, or cost if not annealing.
+        # small data: 0.2, big data: 0.5
+        self.max_beta = torch.Tensor([0.2]).to(self.device)
+
+        # Exponential rate at which to anneal KL cost.
+        self.beta_rate = torch.Tensor([0.99999]).to(self.device)
         self.global_step = 1
-        self.beta = (
-            (1.0 - torch.pow(self.beta_rate, self.global_step)) * self.max_beta
-        ).to(self.device)
 
-        # KL divergence에 Threshold로서 적용되어, Reconstruction loss에 좀 더 가중치를 주는 역할을 함
+        # Beta parameter weights KL Divergence
+        self.beta = ((1.0 - torch.pow(self.beta_rate, self.global_step))
+                     * self.max_beta).to(self.device)
+
+        # free_bits (tau) acts as threshold to KL Divergence
         self.free_bits = torch.Tensor([48.0]).to(self.device)
 
-        # 모델 학습 후 sampling 시, 첫번째 iteration에만 Latent vector를 추출하기 위해 초기값을 None으로 설정
+        # When sampling, the initial hidden state is set to None to extract
+        # the latent matrix only for the first iteration.
         self.sample_hidden_state = None
         self.cache = None
 
     def forward(self, x: torch.tensor, step_size: int, verbose: int = 0) -> float:
 
+        # global_step is used to calculate the beta parameter
         self.global_step += 1
 
-        # 전체 데이터(x)를 받아와서, forward 메소드 내부에서 batch 학습을 진행
+        # Receive the entire data (x) and training with mini-batch
         batch_size = x.shape[0] // step_size
         loss = 0
 
         for n_step in range(step_size):
             input_seq = x[n_step * batch_size : (n_step + 1) * batch_size]
 
-            # input_seq의 크기가 나누어 떨어지지 않는 경우를 위해, batch_size 보다 작은 크기를 가진 경우 중단
+            # Stop if input_seq has a size smaller than batch_size
             if input_seq.shape[0] < batch_size:
                 break
 
-            # 전체 데이터를 모두 활용해서 Encoder를 학습함
+            # Encoder is trained using all data
             output, _ = self.encoder.forward(input_seq)
 
         mu = self.fc_mu(output)
         log_var = self.fc_var(output)
 
-        # 학습이 끝난 후 sampling 시에 사용하기 위해 mu, log_var을 저장
+        # After learning, mu and log_var are saved to be used for sampling.
         self.cache = mu, log_var
 
         kl_div = kl_divergence(mu, log_var)
@@ -74,7 +75,7 @@ class MusicVAE(nn.Module):
             torch.abs(kl_div - self.free_bits), torch.Tensor([0]).to(self.device)
         )
 
-        z_emb, _ = self.reparameterize(mu, log_var)
+        z_emb, _ = self.reparameterize(mu, log_var)  # z_emb: latent matrix
         initial_state_of_conductor = self.fc_z_emb(z_emb)
 
         for n_step in range(step_size):
@@ -90,11 +91,12 @@ class MusicVAE(nn.Module):
             probs = self.decoder(initial_state_of_decoder)
 
             input_seq = x[n_step * batch_size : (n_step + 1) * batch_size]
-            recon_loss = self.bce(probs, input_seq)
+            recon_loss = self.recon_loss(probs, input_seq)
 
             if verbose:
                 print(
-                    f"Reconstruction loss: {recon_loss}, KL divergence loss: {kl_loss.item()}"
+                    f"Reconstruction loss: {recon_loss}, "
+                    f"KL divergence loss: {kl_loss.item()}"
                 )
 
             loss += recon_loss + self.beta * kl_loss
@@ -104,14 +106,13 @@ class MusicVAE(nn.Module):
     def reparameterize(
         self, mu: torch.tensor, log_var: torch.tensor
     ) -> Tuple[torch.tensor, torch.tensor]:
-        # mean과 log variance의 분포로부터 latent vector를 추출
+        # Extract a latent matrix from the distribution with mean and log variance.
         std = torch.mul(log_var, 0.5).exp_()
         eps = torch.FloatTensor(std.size()).normal_().to(self.device)
         return mu + torch.mul(std, eps), std
 
     def sample(self) -> torch.tensor:
-        # 모델 학습 후 sampling 시, 첫번째 iteration에만 Latent vector를 추출해서,
-        # conductor의 인자로 쓰고, 이후의 sampling 시에는 hidden_state를 인자로 적용
+        # When sampling, extract the latent matrix only for the first iteration.
         if self.sample_hidden_state is None:
             mu, log_var = self.cache
             z_emb, _ = self.reparameterize(mu, log_var)
@@ -124,11 +125,11 @@ class MusicVAE(nn.Module):
                 self.sample_hidden_state
             )
         initial_state_of_decoder = self.fc_conductor(context)
-        decoded_probs = self.decoder(initial_state_of_decoder)
-        return OneHotCategorical(decoded_probs)
+        probs = self.decoder(initial_state_of_decoder)
+        return OneHotCategorical(probs)
 
     def initialize_sampler(self) -> None:
-        # sampling을 한 후에 새롭게 sampling을 하려 할 경우에 초기화함
+        # Initialize when you want to re-sample after sampling.
         self.sample_hidden_state = None
 
 
@@ -140,7 +141,7 @@ class Encoder(nn.Module):
         self.lstm_2 = nn.LSTM(input_size=2048, hidden_size=512, bidirectional=True)
 
     def forward(
-        self, x: torch.tensor
+            self, x: torch.tensor
     ) -> Tuple[torch.tensor, Tuple[torch.tensor, torch.tensor]]:
         output, _ = self.lstm_1(x)
         return self.lstm_2(output)
@@ -152,7 +153,9 @@ class Conductor(nn.Module):
         self.conductor_1 = nn.LSTM(input_size=512, hidden_size=1024)
         self.conductor_2 = nn.LSTM(input_size=1024, hidden_size=512)
 
-    def forward(self, x: torch.tensor) -> torch.tensor:
+    def forward(
+            self, x: torch.tensor
+    ) -> Tuple[torch.tensor, Tuple[torch.tensor, torch.tensor]]:
         output, _ = self.conductor_1(x)
         return self.conductor_2(output)
 
