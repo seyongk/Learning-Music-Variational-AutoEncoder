@@ -33,9 +33,7 @@ class MusicVAE(nn.Module):
         self.beta_rate = torch.Tensor([0.99999]).to(self.device)
         self.global_step = 1
 
-        # Beta parameter weights KL Divergence
-        self.beta = ((1.0 - torch.pow(self.beta_rate, self.global_step))
-                     * self.max_beta).to(self.device)
+        self.beta = None
 
         # free_bits (tau) acts as threshold to KL Divergence
         self.free_bits = torch.Tensor([48.0]).to(self.device)
@@ -46,6 +44,9 @@ class MusicVAE(nn.Module):
         self.cache = None
 
     def forward(self, x: torch.tensor, step_size: int, verbose: int = 0) -> float:
+        # Beta parameter weights KL Divergence
+        self.beta = ((1.0 - torch.pow(self.beta_rate, self.global_step))
+                     * self.max_beta).to(self.device)
 
         # global_step is used to calculate the beta parameter
         self.global_step += 1
