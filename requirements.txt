@@ -1,0 +1,5 @@
+numpy
+pandas
+music21
+matplotlib
+torch
